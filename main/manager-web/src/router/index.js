@@ -61,6 +61,17 @@ const routes = [
       return import('../views/DeviceManagement.vue')
     }
   },
+  {
+    path: '/device-recordings/:agentId/:deviceId',
+    name: 'DeviceRecordings',
+    component: function () {
+      return import('../views/DeviceRecordings.vue')
+    },
+    meta: {
+      requiresAuth: true,
+      title: '设备录音'
+    }
+  },
   // 添加用户管理路由
   {
     path: '/user-management',
@@ -217,7 +228,7 @@ VueRouter.prototype.push = function push(location) {
 }
 
 // 需要登录才能访问的路由
-const protectedRoutes = ['home', 'RoleConfig', 'DeviceManagement', 'UserManagement', 'ModelConfig', 'KnowledgeBaseManagement', 'KnowledgeFileUpload']
+const protectedRoutes = ['home', 'RoleConfig', 'DeviceManagement', 'DeviceRecordings', 'UserManagement', 'ModelConfig', 'KnowledgeBaseManagement', 'KnowledgeFileUpload']
 
 // 路由守卫
 router.beforeEach((to, from, next) => {

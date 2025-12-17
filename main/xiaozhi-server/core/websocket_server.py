@@ -44,15 +44,20 @@ class WebSocketServer:
         self.config = config
         self.logger = setup_logging()
         self.config_lock = asyncio.Lock()
+        recording_enabled = bool(
+            ((self.config.get("server", {}) or {}).get("recording", {}) or {}).get(
+                "enabled", False
+            )
+        )
         modules = initialize_modules(
             self.logger,
             self.config,
-            "VAD" in self.config["selected_module"],
-            "ASR" in self.config["selected_module"],
-            "LLM" in self.config["selected_module"],
+            (not recording_enabled) and ("VAD" in self.config["selected_module"]),
+            (not recording_enabled) and ("ASR" in self.config["selected_module"]),
+            (not recording_enabled) and ("LLM" in self.config["selected_module"]),
             False,
-            "Memory" in self.config["selected_module"],
-            "Intent" in self.config["selected_module"],
+            (not recording_enabled) and ("Memory" in self.config["selected_module"]),
+            (not recording_enabled) and ("Intent" in self.config["selected_module"]),
         )
         self._vad = modules["vad"] if "vad" in modules else None
         self._asr = modules["asr"] if "asr" in modules else None

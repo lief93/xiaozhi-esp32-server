@@ -61,6 +61,9 @@
               </el-table-column>
               <el-table-column :label="$t('device.operation')" align="center">
                 <template slot-scope="scope">
+                  <el-button size="mini" type="text" @click="goRecordings(scope.row.macAddress)">
+                    录音
+                  </el-button>
                   <el-button size="mini" type="text" @click="handleUnbind(scope.row.device_id)">
                     {{ $t('device.unbind') }}
                   </el-button>
@@ -823,3 +826,13 @@ export default {
   display: none !important;
 }
 </style>
+    goRecordings(macAddress) {
+      if (!this.currentAgentId || !macAddress) {
+        this.$message.warning('缺少agentId或设备ID');
+        return;
+      }
+      this.$router.push({
+        name: 'DeviceRecordings',
+        params: { agentId: this.currentAgentId, deviceId: macAddress }
+      });
+    },

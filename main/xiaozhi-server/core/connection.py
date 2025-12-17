@@ -41,6 +41,11 @@ from config.manage_api_client import DeviceNotFoundException, DeviceBindExceptio
 from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils import textUtils
+from core.utils.audio_recording import (
+    AudioRecorder,
+    RecordingConfig,
+    sanitize_device_id,
+)
 
 TAG = __name__
 
@@ -162,6 +167,24 @@ class ConnectionHandler:
         # 标记连接是否来自MQTT
         self.conn_from_mqtt_gateway = False
 
+        # 录音配置（仅存储音频，不做对话/ASR/LLM）
+        recording_cfg = (self.config.get("server", {}) or {}).get("recording", {}) or {}
+        self.recording_enabled = bool(recording_cfg.get("enabled", False))
+        self._audio_recorder = AudioRecorder(
+            RecordingConfig(
+                enabled=self.recording_enabled,
+                root_dir=str(recording_cfg.get("root_dir", "/recordings")),
+                segment_seconds=int(recording_cfg.get("segment_seconds", 180)),
+                sample_rate=int(recording_cfg.get("sample_rate", 16000)),
+                channels=int(recording_cfg.get("channels", 1)),
+                mp3_bitrate=str(recording_cfg.get("mp3_bitrate", "64k")),
+                ffmpeg_path=str(recording_cfg.get("ffmpeg_path", "ffmpeg")),
+                keep_wav=bool(recording_cfg.get("keep_wav", False)),
+            ),
+            device_id="unknown",
+            session_id=self.session_id,
+        )
+
         # 初始化提示词管理器
         self.prompt_manager = PromptManager(self.config, self.logger)
 
@@ -184,6 +207,9 @@ class ConnectionHandler:
             )
 
             self.device_id = self.headers.get("device-id", None)
+            # 更新录音器设备ID（用于落盘目录）
+            self._audio_recorder.device_id = self.device_id or "unknown"
+            self._audio_recorder.device_dir = sanitize_device_id(self.device_id or "")
 
             # 认证通过,继续处理
             self.websocket = ws
@@ -236,6 +262,11 @@ class ConnectionHandler:
     async def _save_and_close(self, ws):
         """保存记忆并关闭连接"""
         try:
+            if self.recording_enabled:
+                try:
+                    self._audio_recorder.close()
+                except Exception as e:
+                    self.logger.bind(tag=TAG).error(f"录音落盘失败: {e}")
             if self.memory:
                 # 使用线程池异步保存记忆
                 def save_memory_task():
@@ -301,6 +332,16 @@ class ConnectionHandler:
         if isinstance(message, str):
             await handleTextMessage(self, message)
         elif isinstance(message, bytes):
+            if self.recording_enabled:
+                # 处理来自MQTT网关的音频包（含16字节头部）
+                if self.conn_from_mqtt_gateway and len(message) >= 16:
+                    handled = await self._process_mqtt_audio_message_for_recording(message)
+                    if handled:
+                        return
+                # 直接记录原始包（默认opus，或hello中会更新为pcm）
+                self._audio_recorder.append_audio_packet(message, self.audio_format)
+                return
+
             if self.vad is None or self.asr is None:
                 return
 
@@ -313,6 +354,21 @@ class ConnectionHandler:
             # 不需要头部处理或没有头部时，直接处理原始消息
             self.asr_audio_queue.put(message)
 
+    async def _process_mqtt_audio_message_for_recording(self, message: bytes) -> bool:
+        """录音模式下处理来自MQTT网关的音频消息，解析16字节头部并提取音频数据"""
+        try:
+            audio_length = int.from_bytes(message[12:16], "big")
+            if audio_length > 0 and len(message) >= 16 + audio_length:
+                audio_data = message[16 : 16 + audio_length]
+                self._audio_recorder.append_audio_packet(audio_data, self.audio_format)
+                return True
+            if len(message) > 16:
+                audio_data = message[16:]
+                self._audio_recorder.append_audio_packet(audio_data, self.audio_format)
+                return True
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"录音模式解析MQTT音频包失败: {e}")
+        return False
     async def _process_mqtt_audio_message(self, message):
         """
         处理来自MQTT网关的音频消息，解析16字节头部并提取音频数据
@@ -550,7 +606,8 @@ class ConnectionHandler:
             # 异步获取差异化配置
             await self._initialize_private_config_async()
             # 在线程池中初始化组件
-            self.executor.submit(self._initialize_components)
+            if not self.recording_enabled:
+                self.executor.submit(self._initialize_components)
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"后台初始化失败: {e}")
 
@@ -659,6 +716,8 @@ class ConnectionHandler:
             self.config["context_providers"] = private_config["context_providers"]
 
         # 使用 run_in_executor 在线程池中执行 initialize_modules，避免阻塞主循环
+        if self.recording_enabled:
+            return
         try:
             modules = await self.loop.run_in_executor(
                 None,  # 使用默认线程池

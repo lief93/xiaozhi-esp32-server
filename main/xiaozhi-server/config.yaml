@@ -41,6 +41,20 @@ server:
   mqtt_signature_key: null
   # UDP网关配置
   udp_gateway: null
+  # 录音模式：只存储设备上传的音频，不做对话/ASR/LLM（测试阶段可用）
+  recording:
+    enabled: true
+    # 录音文件落盘目录（Docker全模块建议挂载为宿主机 ./recordings）
+    root_dir: /recordings
+    # 每段音频时长（秒），默认三分钟一个文件
+    segment_seconds: 180
+    # 采样率/声道需与设备端一致（默认16000/1）
+    sample_rate: 16000
+    channels: 1
+    # 转码参数（依赖ffmpeg）
+    ffmpeg_path: ffmpeg
+    mp3_bitrate: 64k
+    keep_wav: false
 log:
   # 设置控制台输出的日志格式，时间、日志级别、标签、消息
   log_format: "<green>{time:YYMMDD HH:mm:ss}</green>[{version}_{selected_module}][<light-blue>{extra[tag]}</light-blue>]-<level>{level}</level>-<light-green>{message}</light-green>"

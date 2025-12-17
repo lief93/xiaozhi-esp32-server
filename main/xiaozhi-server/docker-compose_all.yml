@@ -26,6 +26,8 @@ services:
       - ./data:/opt/xiaozhi-esp32-server/data
       # 模型文件挂接，很重要
       - ./models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt
+      # 录音文件目录（可选）
+      - ./recordings:/recordings
 
   # manager-api和manager-web模块
   xiaozhi-esp32-server-web:
@@ -53,6 +55,8 @@ services:
     volumes:
       # 配置文件目录
       - ./uploadfile:/uploadfile
+      # 录音文件目录（可选，仅用于智控台查看/播放）
+      - ./recordings:/recordings
   # 数据库模块
   xiaozhi-esp32-server-db:
     image: mysql:latest

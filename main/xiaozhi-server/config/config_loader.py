@@ -77,6 +77,7 @@ async def get_config_from_api_async(config):
             "http_port": config["server"].get("http_port", ""),
             "vision_explain": config["server"].get("vision_explain", ""),
             "auth_key": config["server"].get("auth_key", ""),
+            "recording": config["server"].get("recording", {}),
         }
     config_data["server"]["auth"] = {"enabled": auth_enabled}
     # 如果服务器没有prompt_template，则从本地配置读取
@@ -124,6 +125,11 @@ def ensure_directories(config):
             dirs_to_create.add(full_model_dir)
 
     # 统一创建目录（保留原data目录创建）
+    # 录音目录（可选）
+    recording_cfg = (config.get("server", {}) or {}).get("recording", {}) or {}
+    if recording_cfg.get("enabled"):
+        dirs_to_create.add(str(recording_cfg.get("root_dir", "/recordings")))
+
     for dir_path in dirs_to_create:
         try:
             os.makedirs(dir_path, exist_ok=True)

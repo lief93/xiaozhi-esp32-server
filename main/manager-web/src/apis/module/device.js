@@ -102,4 +102,23 @@ export default {
                 });
             }).send();
     },
+    // 获取设备录音列表
+    getDeviceRecordings(agentId, deviceId, callback) {
+        RequestService.sendRequest()
+            .url(`${getServiceUrl()}/device/recordings/${agentId}/${encodeURIComponent(deviceId)}`)
+            .method('GET')
+            .success((res) => {
+                RequestService.clearRequestTime();
+                callback(res);
+            })
+            .networkFail((err) => {
+                console.error('获取设备录音失败:', err);
+                RequestService.reAjaxFun(() => {
+                    this.getDeviceRecordings(agentId, deviceId, callback);
+                });
+            }).send();
+    },
+    getDeviceRecordingFileUrl(agentId, deviceId, fileName) {
+        return `${getServiceUrl()}/device/recordings/${agentId}/${encodeURIComponent(deviceId)}/file/${encodeURIComponent(fileName)}`;
+    },
 }
