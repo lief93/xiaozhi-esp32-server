@@ -1,0 +1,10 @@
+# 最小配置：关闭鉴权 + 开启录音（3分钟切片，转MP3）
+# 说明：只用本地源码运行（方案A）时，不要配置 manager-api.url/secret
+server:
+  auth:
+    enabled: false
+  recording:
+    enabled: true
+    # 相对路径会相对于 main/xiaozhi-server 目录
+    root_dir: recordings
+    segment_seconds: 180
