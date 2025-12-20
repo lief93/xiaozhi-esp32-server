@@ -10,6 +10,7 @@ import threading
 import traceback
 import subprocess
 import websockets
+from urllib.parse import parse_qs, urlparse
 
 from core.utils.util import (
     extract_json_from_string,
@@ -195,6 +196,22 @@ class ConnectionHandler:
 
             # 获取并验证headers
             self.headers = dict(ws.request.headers)
+            # 支持从URL query中读取 device-id/client-id/authorization（方便简单客户端/测试工具）
+            try:
+                request_path = ws.request.path or ""
+                parsed_url = urlparse(request_path)
+                query_params = parse_qs(parsed_url.query)
+                if "device-id" not in self.headers and "device-id" in query_params:
+                    self.headers["device-id"] = query_params["device-id"][0]
+                if "client-id" not in self.headers and "client-id" in query_params:
+                    self.headers["client-id"] = query_params["client-id"][0]
+                if "authorization" not in self.headers and "authorization" in query_params:
+                    self.headers["authorization"] = query_params["authorization"][0]
+            except Exception:
+                pass
+            # 允许无 device-id 的连接（录音/本地调试场景），使用默认值
+            self.headers.setdefault("device-id", "unknown")
+            self.headers.setdefault("client-id", self.headers.get("device-id", "unknown"))
             real_ip = self.headers.get("x-real-ip") or self.headers.get(
                 "x-forwarded-for"
             )
