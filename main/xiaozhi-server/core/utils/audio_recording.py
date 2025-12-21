@@ -5,7 +5,7 @@ import wave
 import shutil
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import opuslib_next
@@ -45,6 +45,13 @@ class AudioRecorder:
         self._segment_index: int = 0
         self._segment_start_epoch: Optional[int] = None
 
+    @staticmethod
+    def _time_range_label(start: datetime, end: datetime) -> str:
+        # If it crosses day boundary, include date to avoid ambiguity.
+        if start.date() != end.date():
+            return f"{start.strftime('%Y%m%d%H%M%S')}-{end.strftime('%Y%m%d%H%M%S')}"
+        return f"{start.strftime('%H%M%S')}-{end.strftime('%H%M%S')}"
+
     def append_audio_packet(self, packet: bytes, audio_format: str) -> None:
         if not self.config.enabled:
             return
@@ -80,7 +87,12 @@ class AudioRecorder:
 
         self._segment_start_epoch = int(time.time())
         ts = now.strftime("%Y%m%d_%H%M%S")
-        base_name = f"{ts}_{self._segment_start_epoch}_{self.session_id}_{self._segment_index}"
+        end = now + timedelta(seconds=max(int(self.config.segment_seconds), 1))
+        range_label = self._time_range_label(now, end)
+        base_name = (
+            f"{ts}_{self._segment_start_epoch}_{self.session_id}_"
+            f"{self._segment_index}_{range_label}"
+        )
         self._wav_path = os.path.join(device_root, f"{base_name}.wav")
 
         wav_fp = wave.open(self._wav_path, "wb")
@@ -125,6 +137,9 @@ class AudioRecorder:
         wav_fp = self._wav_fp
         wav_path = self._wav_path
         frames_written = self._frames_written
+        actual_duration_ms = int(
+            (frames_written * 1000) / max(self.config.sample_rate, 1)
+        )
 
         self._wav_fp = None
         self._wav_path = None
@@ -142,6 +157,18 @@ class AudioRecorder:
             except Exception:
                 pass
             return
+
+        # Rename the wav to embed the configured segment length and actual length.
+        # This keeps directories clean and makes it obvious why a file is shorter
+        # than the configured segment_seconds.
+        try:
+            base, ext = os.path.splitext(wav_path)
+            renamed_wav_path = f"{base}_seg{self.config.segment_seconds}s_len{actual_duration_ms}ms{ext}"
+            if renamed_wav_path != wav_path:
+                os.replace(wav_path, renamed_wav_path)
+                wav_path = renamed_wav_path
+        except Exception:
+            pass
 
         if not shutil.which(self.config.ffmpeg_path):
             return
@@ -173,4 +200,3 @@ class AudioRecorder:
                     pass
         except Exception:
             return
-
