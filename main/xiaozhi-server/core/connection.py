@@ -350,6 +350,9 @@ class ConnectionHandler:
             await handleTextMessage(self, message)
         elif isinstance(message, bytes):
             if self.recording_enabled:
+                # 录音模式下也需要刷新活动时间戳，否则会被超时任务误判为“长时间无活动”而断开，
+                # 导致只生成一个文件或连接意外关闭。
+                self.last_activity_time = time.time() * 1000
                 # 处理来自MQTT网关的音频包（含16字节头部）
                 if self.conn_from_mqtt_gateway and len(message) >= 16:
                     handled = await self._process_mqtt_audio_message_for_recording(message)

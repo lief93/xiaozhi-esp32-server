@@ -9,6 +9,10 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import opuslib_next
+from config.logger import setup_logging
+
+TAG = __name__
+logger = setup_logging()
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,9 @@ class AudioRecorder:
         self._frames_written: int = 0
         self._segment_index: int = 0
         self._segment_start_epoch: Optional[int] = None
+        self._segment_start_wall: Optional[float] = None
+        self._base_start_wall: Optional[float] = None
+        self._base_start_dt: Optional[datetime] = None
 
     @staticmethod
     def _time_range_label(start: datetime, end: datetime) -> str:
@@ -52,13 +59,63 @@ class AudioRecorder:
             return f"{start.strftime('%Y%m%d%H%M%S')}-{end.strftime('%Y%m%d%H%M%S')}"
         return f"{start.strftime('%H%M%S')}-{end.strftime('%H%M%S')}"
 
+    def _ensure_segment_open_for_index(self, index: int, now_dt: datetime) -> None:
+        if self._wav_fp is not None:
+            return
+
+        seg_s = max(int(self.config.segment_seconds), 1)
+        if self._base_start_wall is None or self._base_start_dt is None:
+            self._base_start_wall = time.time()
+            self._base_start_dt = now_dt
+
+        # Compute segment start/end based on the first packet time.
+        seg_start_dt = self._base_start_dt + timedelta(seconds=index * seg_s)
+        seg_end_dt = seg_start_dt + timedelta(seconds=seg_s)
+
+        os.makedirs(self.config.root_dir, exist_ok=True)
+        date_dir = seg_start_dt.strftime("%Y-%m-%d")
+        device_root = os.path.join(self.config.root_dir, self.device_dir, date_dir)
+        os.makedirs(device_root, exist_ok=True)
+
+        self._segment_start_epoch = int(seg_start_dt.timestamp())
+        self._segment_start_wall = time.time()
+        ts = seg_start_dt.strftime("%Y%m%d_%H%M%S")
+        range_label = self._time_range_label(seg_start_dt, seg_end_dt)
+        base_name = f"{ts}_{self._segment_start_epoch}_{self.session_id}_{index}_{range_label}"
+        self._wav_path = os.path.join(device_root, f"{base_name}.wav")
+        logger.bind(tag=TAG).info(
+            f"录音段开始: device_id={self.device_id} idx={index} path={self._wav_path}"
+        )
+
+        wav_fp = wave.open(self._wav_path, "wb")
+        wav_fp.setnchannels(self.config.channels)
+        wav_fp.setsampwidth(2)
+        wav_fp.setframerate(self.config.sample_rate)
+
+        self._wav_fp = wav_fp
+        self._frames_written = 0
+
     def append_audio_packet(self, packet: bytes, audio_format: str) -> None:
         if not self.config.enabled:
             return
         if not packet:
             return
 
-        self._ensure_segment_open()
+        now_dt = datetime.now(timezone.utc).astimezone()
+        seg_s = max(int(self.config.segment_seconds), 1)
+        now_wall = time.time()
+        if self._base_start_wall is None:
+            self._base_start_wall = now_wall
+            self._base_start_dt = now_dt
+        target_index = int((now_wall - self._base_start_wall) // seg_s)
+        if target_index != self._segment_index and self._wav_fp is not None:
+            logger.bind(tag=TAG).info(
+                f"录音段切换: device_id={self.device_id} from={self._segment_index} to={target_index}"
+            )
+            self._finalize_segment(convert_even_if_short=False)
+        self._segment_index = target_index
+
+        self._ensure_segment_open_for_index(self._segment_index, now_dt)
         if self._wav_fp is None:
             return
 
@@ -70,38 +127,8 @@ class AudioRecorder:
             if pcm_frame:
                 self._write_pcm(pcm_frame)
 
-        self._rotate_if_needed()
-
     def close(self) -> None:
         self._finalize_segment(convert_even_if_short=True)
-
-    def _ensure_segment_open(self) -> None:
-        if self._wav_fp is not None:
-            return
-
-        os.makedirs(self.config.root_dir, exist_ok=True)
-        now = datetime.now(timezone.utc).astimezone()
-        date_dir = now.strftime("%Y-%m-%d")
-        device_root = os.path.join(self.config.root_dir, self.device_dir, date_dir)
-        os.makedirs(device_root, exist_ok=True)
-
-        self._segment_start_epoch = int(time.time())
-        ts = now.strftime("%Y%m%d_%H%M%S")
-        end = now + timedelta(seconds=max(int(self.config.segment_seconds), 1))
-        range_label = self._time_range_label(now, end)
-        base_name = (
-            f"{ts}_{self._segment_start_epoch}_{self.session_id}_"
-            f"{self._segment_index}_{range_label}"
-        )
-        self._wav_path = os.path.join(device_root, f"{base_name}.wav")
-
-        wav_fp = wave.open(self._wav_path, "wb")
-        wav_fp.setnchannels(self.config.channels)
-        wav_fp.setsampwidth(2)
-        wav_fp.setframerate(self.config.sample_rate)
-
-        self._wav_fp = wav_fp
-        self._frames_written = 0
 
     def _write_pcm(self, pcm_frame: bytes) -> None:
         if self._wav_fp is None:
@@ -124,12 +151,6 @@ class AudioRecorder:
         except Exception:
             return b""
 
-    def _rotate_if_needed(self) -> None:
-        segment_frames = self.config.segment_seconds * self.config.sample_rate
-        if self._frames_written >= segment_frames:
-            self._finalize_segment(convert_even_if_short=False)
-            self._segment_index += 1
-
     def _finalize_segment(self, convert_even_if_short: bool) -> None:
         if self._wav_fp is None or self._wav_path is None:
             return
@@ -145,6 +166,7 @@ class AudioRecorder:
         self._wav_path = None
         self._frames_written = 0
         self._segment_start_epoch = None
+        self._segment_start_wall = None
 
         try:
             wav_fp.close()
@@ -171,6 +193,9 @@ class AudioRecorder:
             pass
 
         if not shutil.which(self.config.ffmpeg_path):
+            logger.bind(tag=TAG).warning(
+                f"录音未转码(ffmpeg不可用): device_id={self.device_id} wav={wav_path}"
+            )
             return
 
         mp3_path = os.path.splitext(wav_path)[0] + ".mp3"
@@ -198,5 +223,11 @@ class AudioRecorder:
                     os.remove(wav_path)
                 except Exception:
                     pass
+            logger.bind(tag=TAG).info(
+                f"录音段完成: device_id={self.device_id} mp3={mp3_path} keep_wav={self.config.keep_wav}"
+            )
         except Exception:
+            logger.bind(tag=TAG).error(
+                f"录音转码失败: device_id={self.device_id} wav={wav_path} mp3={mp3_path}"
+            )
             return
